@@ -1,2 +1,2 @@
-# todoist.el
+# org-todoist.el
 Org sync with Todoist.
