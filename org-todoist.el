@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'org)
 (require 'parse-time)
 (require 'request-deferred)
 (require 'seq)
@@ -28,7 +29,6 @@
   :group 'org-todoist
   :type 'string)
 
-
 (defcustom org-todoist-file "~/org/todo.org"
   "."
   :group 'org-todoist
@@ -39,6 +39,7 @@
 (defvar org-todoist-projects nil)
 
 (defun org-todoist-project-tasks (project tasks)
+  "Given a list of TASKS, return only the ones in PROJECT."
   (seq-filter
    (lambda (task)
      (= (alist-get 'id project)
@@ -46,6 +47,7 @@
    tasks))
 
 (defun org-todoist-format-date (date-string)
+  "Given a DATE-STRING, return it in Org format."
   (let* ((date  (parse-time-string date-string))
          (day   (nth 3 date))
          (month (nth 4 date))
@@ -53,7 +55,16 @@
     (format-time-string "%Y-%m-%d %a"
                         (encode-time 0 0 0 day month year))))
 
+(defun org-todoist-format-project (project)
+  "Given a PROJECT, return its Org representation."
+  (concat "* "
+          (alist-get 'name project)
+          "\n   :PROPERTIES:"
+          (format "\n   :ID: %s" (alist-get 'id project))
+          "\n   :END:\n"))
+
 (defun org-todoist-format-task (task)
+  "Given a TASK, return its Org representation."
   (concat "** "
           (if (eq (alist-get 'completed task) :json-false)
               "TODO "
@@ -72,6 +83,32 @@
           (format "\n   :ID: %s" (alist-get 'id task))
           "\n   :END:\n"
           ))
+
+(defun org-todoist-parse ()
+  "Return the AST of the Todoist Org file."
+  (with-temp-buffer
+    (insert-file-contents org-todoist-file)
+    (org-mode)
+    (org-element-parse-buffer)))
+
+(defun org-todoist-parse-projects ()
+  "Parse the projects defined in the Org file."
+  (let ((ast (org-todoist-parse)))
+    (org-element-map ast 'headline
+      (lambda (hl)
+        (when (= (org-element-property :level hl) 1)
+          `((id   . ,(org-element-property :ID hl))
+            (name . ,(org-element-property :raw-value hl))))))))
+
+(defun org-todoist-parse-tasks ()
+  "Parse the tasks defined in the Org file."
+  (let ((ast (org-todoist-parse)))
+    (org-element-map ast 'headline
+      (lambda (hl)
+        (when (= (org-element-property :level hl) 2)
+          `((id         . ,(org-element-property :ID hl))
+            (content    . ,(org-element-property :raw-value hl))
+            (project_id . ,(org-element-property :project_id hl))))))))
 
 (defun org-todoist-sync ()
   "Sync Org file with Todoist."
@@ -100,8 +137,7 @@
             (erase-buffer)
             (insert
              (mapconcat (lambda (project)
-                          (format "* %s\n%s"
-                                  (alist-get 'name project)
+                          (concat (org-todoist-format-project project)
                                   (mapconcat (lambda (task)
                                                (org-todoist-format-task task))
                                              (org-todoist-project-tasks project tasks)
