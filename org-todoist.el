@@ -14,7 +14,9 @@
 ;;; Code:
 
 (require 'json)
+(require 'parse-time)
 (require 'request-deferred)
+(require 'seq)
 
 (defgroup org-todoist nil
   "Org sync with Todoist."
@@ -34,6 +36,43 @@
 
 (defconst org-todoist-url "https://beta.todoist.com/API/v8/%s")
 
+(defvar org-todoist-projects nil)
+
+(defun org-todoist-project-tasks (project tasks)
+  (seq-filter
+   (lambda (task)
+     (= (alist-get 'id project)
+        (alist-get 'project_id task)))
+   tasks))
+
+(defun org-todoist-format-date (date-string)
+  (let* ((date  (parse-time-string date-string))
+         (day   (nth 3 date))
+         (month (nth 4 date))
+         (year  (nth 5 date)))
+    (format-time-string "%Y-%m-%d %a"
+                        (encode-time 0 0 0 day month year))))
+
+(defun org-todoist-format-task (task)
+  (concat "** "
+          (if (eq (alist-get 'completed task) :json-false)
+              "TODO "
+            "DONE ")
+          (pcase (alist-get 'priority task)
+            (4 "[#A] ")
+            (3 "[#B] ")
+            (2 "[#C] ")
+            (_ ""))
+          (alist-get 'content task)
+          (when (alist-get 'due task)
+            (format "\n   SCHEDULED: <%s>"
+                    (org-todoist-format-date
+                     (alist-get 'date (alist-get 'due task)))))
+          "\n   :PROPERTIES:"
+          (format "\n   :ID: %s" (alist-get 'id task))
+          "\n   :END:\n"
+          ))
+
 (defun org-todoist-sync ()
   "Sync Org file with Todoist."
   (interactive)
@@ -42,19 +81,34 @@
      (format org-todoist-url "projects")
      :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
      :parser 'json-read)
+    (deferred:nextc it
+      (lambda (response)
+        (setq org-todoist-projects (request-response-data response))))
 
+    (request-deferred
+     (format org-todoist-url "tasks")
+     :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
+     :parser 'json-read)
     (deferred:nextc it
       (lambda (response)
         (request-response-data response)))
 
     (deferred:nextc it
-      (lambda (projects)
+      (lambda (tasks)
         (with-current-buffer (find-file-noselect org-todoist-file)
           (save-excursion
-            (goto-char (point-max))
-            (insert projects)
+            (erase-buffer)
+            (insert
+             (mapconcat (lambda (project)
+                          (format "* %s\n%s"
+                                  (alist-get 'name project)
+                                  (mapconcat (lambda (task)
+                                               (org-todoist-format-task task))
+                                             (org-todoist-project-tasks project tasks)
+                                             "")))
+                        org-todoist-projects
+                        ""))
             (save-buffer)))))))
-
 
 (provide 'org-todoist)
 ;;; org-todoist.el ends here
