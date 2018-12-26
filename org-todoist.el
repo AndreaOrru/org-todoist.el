@@ -24,7 +24,7 @@
   :tag "org todoist"
   :group 'org)
 
-(defcustom org-todoist-api-token nil
+(defcustom org-todoist-api-token "a75389723a5846c2b1838261aaabc1c5cd099271"
   "API Token for authentication."
   :group 'org-todoist
   :type 'string)
@@ -85,30 +85,27 @@
           ))
 
 (defun org-todoist-parse ()
-  "Return the AST of the Todoist Org file."
-  (with-temp-buffer
-    (insert-file-contents org-todoist-file)
-    (org-mode)
-    (org-element-parse-buffer)))
-
-(defun org-todoist-parse-projects ()
-  "Parse the projects defined in the Org file."
-  (let ((ast (org-todoist-parse)))
-    (org-element-map ast 'headline
-      (lambda (hl)
-        (when (= (org-element-property :level hl) 1)
-          `((id   . ,(org-element-property :ID hl))
-            (name . ,(org-element-property :raw-value hl))))))))
-
-(defun org-todoist-parse-tasks ()
-  "Parse the tasks defined in the Org file."
-  (let ((ast (org-todoist-parse)))
-    (org-element-map ast 'headline
-      (lambda (hl)
-        (when (= (org-element-property :level hl) 2)
-          `((id         . ,(org-element-property :ID hl))
-            (content    . ,(org-element-property :raw-value hl))
-            (project_id . ,(org-element-property :project_id hl))))))))
+  "Return tasks as defined in the Org file."
+  (let ((ast (with-temp-buffer
+               (insert-file-contents org-todoist-file)
+               (org-mode)
+               (org-element-parse-buffer))))
+    (progn
+      (defvar current-project nil)
+      (defvar file-tasks nil)
+      (org-element-map ast 'headline
+        (lambda (hl)
+          (if (= (org-element-property :level hl) 1)
+              (setq current-project hl)
+            (add-to-list
+             'file-tasks
+              `((id         . ,(org-element-property :ID hl))
+                (project_id . ,(org-element-property :ID current-project))
+                (content    . ,(org-element-property :raw-value hl))
+                (completed  . ,(if (string= (org-element-property :todo-keyword hl) "TODO")
+                                   :json-false
+                                 t)))))))
+      file-tasks)))
 
 (defun org-todoist-sync ()
   "Sync Org file with Todoist."
