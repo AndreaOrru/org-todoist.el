@@ -24,7 +24,7 @@
   :tag "org todoist"
   :group 'org)
 
-(defcustom org-todoist-api-token "a75389723a5846c2b1838261aaabc1c5cd099271"
+(defcustom org-todoist-api-token nil
   "API Token for authentication."
   :group 'org-todoist
   :type 'string)
@@ -34,11 +34,24 @@
   :group 'org-todoist
   :type 'string)
 
-(defconst org-todoist-url "https://beta.todoist.com/API/v8/%s")
+(defconst org-todoist-url "https://beta.todoist.com/API/v8/")
 
-(defvar org-todoist-projects nil)
+(defun org-todoist--headers ()
+  "Return HTTP headers for authorized Todoist API requests."
+  `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token))
+    ("Content-Type"  . "application/json")))
 
-(defun org-todoist-project-tasks (project tasks)
+(defun org-todoist--json-read ()
+  "Internal JSON reading function."
+  (let ((json-object-type 'plist))
+    (goto-char (point-min))
+    (re-search-forward "[\\[{]" nil t)
+    (beginning-of-line)
+    (delete-region (point-min) (point))
+    (goto-char (point-min))
+    (json-read)))
+
+(defun org-todoist--project-tasks (project tasks)
   "Given a list of TASKS, return only the ones in PROJECT."
   (seq-filter
    (lambda (task)
@@ -46,7 +59,7 @@
         (alist-get 'project_id task)))
    tasks))
 
-(defun org-todoist-format-date (date-string)
+(defun org-todoist--format-date (date-string)
   "Given a DATE-STRING, return it in Org format."
   (let* ((date  (parse-time-string date-string))
          (day   (nth 3 date))
@@ -55,7 +68,7 @@
     (format-time-string "%Y-%m-%d %a"
                         (encode-time 0 0 0 day month year))))
 
-(defun org-todoist-format-project (project)
+(defun org-todoist--format-project (project)
   "Given a PROJECT, return its Org representation."
   (concat "* "
           (alist-get 'name project)
@@ -63,7 +76,7 @@
           (format "\n   :ID: %s" (alist-get 'id project))
           "\n   :END:\n"))
 
-(defun org-todoist-format-task (task)
+(defun org-todoist--format-task (task)
   "Given a TASK, return its Org representation."
   (concat "** "
           (if (eq (alist-get 'completed task) :json-false)
@@ -77,71 +90,102 @@
           (alist-get 'content task)
           (when (alist-get 'due task)
             (format "\n   SCHEDULED: <%s>"
-                    (org-todoist-format-date
+                    (org-todoist--format-date
                      (alist-get 'date (alist-get 'due task)))))
           "\n   :PROPERTIES:"
           (format "\n   :ID: %s" (alist-get 'id task))
           "\n   :END:\n"
           ))
 
-(defun org-todoist-parse ()
+(defun org-todoist--generate-task (hl project)
+  "Generate task given HL (Org headline) and current PROJECT."
+  `((id         . ,(org-element-property :ID hl))
+    (project_id . ,(string-to-number (org-element-property :ID project)))
+    (content    . ,(org-element-property :raw-value hl))
+    (completed  . ,(if (string= (org-element-property :todo-keyword hl) "TODO")
+                       :json-false
+                     t))))
+
+(defun org-todoist--parse-tasks ()
   "Return tasks as defined in the Org file."
   (let ((ast (with-temp-buffer
                (insert-file-contents org-todoist-file)
                (org-mode)
-               (org-element-parse-buffer))))
+               (org-element-parse-buffer)))
+        (current-project nil)
+        (tasks nil))
     (progn
-      (defvar current-project nil)
-      (defvar file-tasks nil)
       (org-element-map ast 'headline
         (lambda (hl)
           (if (= (org-element-property :level hl) 1)
               (setq current-project hl)
-            (add-to-list
-             'file-tasks
-              `((id         . ,(org-element-property :ID hl))
-                (project_id . ,(org-element-property :ID current-project))
-                (content    . ,(org-element-property :raw-value hl))
-                (completed  . ,(if (string= (org-element-property :todo-keyword hl) "TODO")
-                                   :json-false
-                                 t)))))))
-      file-tasks)))
+            (add-to-list 'tasks (org-todoist--generate-task hl current-project)))))
+     tasks)))
 
-(defun org-todoist-sync ()
-  "Sync Org file with Todoist."
+(defun org-todoist--new-tasks ()
+  "Return new tasks defined in the Org file."
+  (let* ((tasks (org-todoist--parse-tasks))
+         (new-tasks (seq-filter
+                     (lambda (task) (not (alist-get 'id task)))
+                     tasks)))
+    new-tasks))
+
+(defun org-todoist-upload ()
+  "Upload the Org file to Todoist."
+  (interactive)
+  (let ((updated-tasks nil))
+    (deferred:$
+      (deferred:loop (org-todoist--new-tasks)
+        (lambda (task)
+          (deferred:$
+            (request-deferred
+             (concat org-todoist-url "tasks")
+             :type "POST"
+             :data (json-encode
+                    `(("content"    . ,(alist-get 'content task))
+                      ("project_id" . ,(alist-get 'project_id task))))
+             :headers (org-todoist--headers)
+             :parser 'org-todoist--json-read)
+            (deferred:nextc it
+              (lambda (response)
+                (add-to-list 'updated-tasks (request-response-data response)))))))
+      (deferred:nextc it
+        (lambda ()
+          (message "%S" updated-tasks))))))
+
+(defun org-todoist-download ()
+  "Download remote Todoist data into the Org file."
   (interactive)
   (deferred:$
-    (request-deferred
-     (format org-todoist-url "projects")
-     :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
-     :parser 'json-read)
-    (deferred:nextc it
-      (lambda (response)
-        (setq org-todoist-projects (request-response-data response))))
-
-    (request-deferred
-     (format org-todoist-url "tasks")
-     :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
-     :parser 'json-read)
-    (deferred:nextc it
-      (lambda (response)
-        (request-response-data response)))
+    (deferred:parallel
+      (lambda ()
+        (request-deferred
+         (concat org-todoist-url "projects")
+         :headers (org-todoist--headers)
+         :parser 'org-todoist--json-read))
+      (lambda ()
+        (request-deferred
+         (concat org-todoist-url "tasks")
+         :headers (org-todoist--headers)
+         :parser 'org-todoist--json-read)))
 
     (deferred:nextc it
-      (lambda (tasks)
-        (with-current-buffer (find-file-noselect org-todoist-file)
-          (save-excursion
-            (erase-buffer)
-            (insert
-             (mapconcat (lambda (project)
-                          (concat (org-todoist-format-project project)
-                                  (mapconcat (lambda (task)
-                                               (org-todoist-format-task task))
-                                             (org-todoist-project-tasks project tasks)
-                                             "")))
-                        org-todoist-projects
-                        ""))
-            (save-buffer)))))))
+      (lambda (responses)
+        (let ((projects (request-response-data (nth 0 responses)))
+              (tasks    (request-response-data (nth 1 responses))))
+          (with-current-buffer (find-file-noselect org-todoist-file)
+            (save-excursion
+              (erase-buffer)
+              (insert
+               (mapconcat (lambda (project)
+                            (concat (org-todoist--format-project project)
+                                    (mapconcat (lambda (task)
+                                                 (org-todoist--format-task task))
+                                               (org-todoist--project-tasks project tasks)
+                                               "")))
+                          projects
+                          ""))
+              (save-buffer))))))))
 
 (provide 'org-todoist)
 ;;; org-todoist.el ends here
