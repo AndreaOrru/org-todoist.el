@@ -144,7 +144,11 @@
                                            (alist-get 'id task)))
            :type "POST"
            :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
-           :parser 'json-read))))))
+           :parser 'json-read)
+
+          (deferred:nextc it
+            (lambda ()
+              (message "Closed tasks."))))))))
 
 (defun org-todoist--create-new-tasks ()
   "Upload the Org file to Todoist."
@@ -161,7 +165,11 @@
                     ("project_id" . ,(alist-get 'project_id task))))
            :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token))
                       ("Content-Type"  . "application/json"))
-           :parser 'org-todoist--json-read))))))
+           :parser 'org-todoist--json-read)
+
+          (deferred:nextc it
+            (lambda ()
+              (message "Created tasks."))))))))
 
 (defun org-todoist-download ()
   "Download remote Todoist data into the Org file."
@@ -195,15 +203,20 @@
                                                "")))
                           projects
                           ""))
-              (save-buffer))))))))
+              (save-buffer))))))
+
+    (deferred:nextc it
+      (lambda ()
+        (message "Downloaded tasks.")))))
 
 (defun org-todoist-sync ()
   "Sync the Org file to Todoist."
   (interactive)
   (deferred:$
-    (deferred:next     (lambda () (org-todoist--create-new-tasks)))
-    (deferred:nextc it (lambda () (org-todoist--close-tasks)))
-    (deferred:nextc it (lambda () (org-todoist-download)))))
+    (deferred:next     (lambda() (org-todoist--create-new-tasks)))
+    (deferred:nextc it (lambda() (org-todoist--close-tasks)))
+    (deferred:nextc it (lambda() (org-todoist-download)))
+    (deferred:nextc it (lambda() (message "Synced.")))))
 
 (provide 'org-todoist)
 ;;; org-todoist.el ends here
