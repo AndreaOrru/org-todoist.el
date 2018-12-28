@@ -36,11 +36,6 @@
 
 (defconst org-todoist-url "https://beta.todoist.com/API/v8/")
 
-(defun org-todoist--headers ()
-  "Return HTTP headers for authorized Todoist API requests."
-  `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token))
-    ("Content-Type"  . "application/json")))
-
 (defun org-todoist--json-read ()
   "Internal JSON reading function."
   (let ((json-object-type 'plist))
@@ -124,34 +119,49 @@
 
 (defun org-todoist--new-tasks ()
   "Return new tasks defined in the Org file."
-  (let* ((tasks (org-todoist--parse-tasks))
-         (new-tasks (seq-filter
-                     (lambda (task) (not (alist-get 'id task)))
-                     tasks)))
-    new-tasks))
+  (let ((tasks (org-todoist--parse-tasks)))
+    (seq-filter
+     (lambda (task) (not (alist-get 'id task)))
+     tasks)))
 
-(defun org-todoist-upload ()
+(defun org-todoist--tasks-to-close ()
+  "Return tasks to be closed, defined in the Org file."
+  (let ((tasks (org-todoist--parse-tasks)))
+    (seq-filter
+     (lambda (task)
+       (and (alist-get 'id task)
+            (not (eq (alist-get 'completed task) :json-false))))
+     tasks)))
+
+(defun org-todoist--close-tasks ()
+  "Close all DONE tasks in the Org file."
+  (deferred:$
+    (deferred:loop (org-todoist--tasks-to-close)
+      (lambda (task)
+        (deferred:$
+          (request-deferred
+           (concat org-todoist-url (format "tasks/%s/close"
+                                           (alist-get 'id task)))
+           :type "POST"
+           :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
+           :parser 'json-read))))))
+
+(defun org-todoist--create-new-tasks ()
   "Upload the Org file to Todoist."
   (interactive)
-  (let ((updated-tasks nil))
-    (deferred:$
-      (deferred:loop (org-todoist--new-tasks)
-        (lambda (task)
-          (deferred:$
-            (request-deferred
-             (concat org-todoist-url "tasks")
-             :type "POST"
-             :data (json-encode
-                    `(("content"    . ,(alist-get 'content task))
-                      ("project_id" . ,(alist-get 'project_id task))))
-             :headers (org-todoist--headers)
-             :parser 'org-todoist--json-read)
-            (deferred:nextc it
-              (lambda (response)
-                (add-to-list 'updated-tasks (request-response-data response)))))))
-      (deferred:nextc it
-        (lambda ()
-          (message "%S" updated-tasks))))))
+  (deferred:$
+    (deferred:loop (org-todoist--new-tasks)
+      (lambda (task)
+        (deferred:$
+          (request-deferred
+           (concat org-todoist-url "tasks")
+           :type "POST"
+           :data (json-encode
+                  `(("content"    . ,(alist-get 'content task))
+                    ("project_id" . ,(alist-get 'project_id task))))
+           :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token))
+                      ("Content-Type"  . "application/json"))
+           :parser 'org-todoist--json-read))))))
 
 (defun org-todoist-download ()
   "Download remote Todoist data into the Org file."
@@ -161,13 +171,13 @@
       (lambda ()
         (request-deferred
          (concat org-todoist-url "projects")
-         :headers (org-todoist--headers)
-         :parser 'org-todoist--json-read))
+         :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
+         :parser 'json-read))
       (lambda ()
         (request-deferred
          (concat org-todoist-url "tasks")
-         :headers (org-todoist--headers)
-         :parser 'org-todoist--json-read)))
+         :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
+         :parser 'json-read)))
 
     (deferred:nextc it
       (lambda (responses)
@@ -186,6 +196,14 @@
                           projects
                           ""))
               (save-buffer))))))))
+
+(defun org-todoist-sync ()
+  "Sync the Org file to Todoist."
+  (interactive)
+  (deferred:$
+    (deferred:next     (lambda () (org-todoist--create-new-tasks)))
+    (deferred:nextc it (lambda () (org-todoist--close-tasks)))
+    (deferred:nextc it (lambda () (org-todoist-download)))))
 
 (provide 'org-todoist)
 ;;; org-todoist.el ends here
