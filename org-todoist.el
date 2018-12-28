@@ -203,7 +203,8 @@
                                                "")))
                           projects
                           ""))
-              (save-buffer))))))
+              (save-buffer)
+              (org-shifttab 0))))))
 
     (deferred:nextc it
       (lambda ()
