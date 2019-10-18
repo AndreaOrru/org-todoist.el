@@ -34,7 +34,7 @@
   :group 'org-todoist
   :type 'string)
 
-(defconst org-todoist-url "https://beta.todoist.com/API/v8/")
+(defconst org-todoist-url "https://api.todoist.com/rest/v1/")
 
 (defun org-todoist--json-read ()
   "Internal JSON reading function."
