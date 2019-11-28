@@ -166,6 +166,7 @@
           (request-deferred
            (concat org-todoist-url "tasks")
            :type "POST"
+           :encoding 'utf-8
            :data (json-encode
                   `(("content"    . ,(alist-get 'content task))
                     ("project_id" . ,(alist-get 'project_id task))))
@@ -186,12 +187,14 @@
         (request-deferred
          (concat org-todoist-url "projects")
          :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
+         :encoding 'utf-8
          :parser 'json-read))
       (lambda ()
         (request-deferred
          (concat org-todoist-url "tasks")
          :params `(("filter" . ,(or org-todoist-filter "")))
          :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
+         :encoding 'utf-8
          :parser 'json-read)))
 
     (deferred:nextc it
