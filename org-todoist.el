@@ -34,6 +34,12 @@
   :group 'org-todoist
   :type 'string)
 
+(defcustom org-todoist-filter nil
+  "A filter to apply for retrieving tasks"
+  :group 'org-todoist
+  :type 'string
+  )
+
 (defconst org-todoist-url "https://api.todoist.com/rest/v1/")
 
 (defun org-todoist--json-read ()
@@ -184,6 +190,7 @@
       (lambda ()
         (request-deferred
          (concat org-todoist-url "tasks")
+         :params `(("filter" . ,(or org-todoist-filter "")))
          :headers `(("Authorization" . ,(format "Bearer %s" org-todoist-api-token)))
          :parser 'json-read)))
 
